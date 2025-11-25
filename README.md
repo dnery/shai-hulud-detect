@@ -1,6 +1,6 @@
 # shai-hulud-2-check
 
-A simple bash script that will scan your project dir for package-lock.json & pnpm-lock.yaml files that contain vulnerabilities listed in the wiz-sec vulnerability CSV.
+A simple bash script that will scan your project dir for package-lock.json, pnpm-lock.yaml & yarn.lock files that contain vulnerabilities listed in the wiz-sec vulnerability CSV.
 
 ## Requirements
 
