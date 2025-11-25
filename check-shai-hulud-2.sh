@@ -142,6 +142,51 @@ while IFS= read -r PLOCK; do
 
 done < <(find "$DIR" -type f -name "pnpm-lock.yaml")
 
+# Find and scan all yarn.lock files recursively
+while IFS= read -r YLOCK; do
+  echo "Scanning yarn lockfile: $YLOCK" >&2
+
+  INSTALLED_PACKAGES="$(
+    awk '
+      /^[^[:space:]].*:$/ {
+        # remove trailing colon + quotes
+        line = $0
+        gsub(/"/, "", line)
+        sub(/:$/, "", line)
+
+        # extract name before the last "@"
+        i = match(line, /@[^@]*$/)
+        if (i > 0) {
+          name = substr(line, 1, i-1)
+        } else {
+          next
+        }
+        next
+      }
+
+      /version / {
+        gsub(/"/, "", $0)
+        ver = $2
+        if (name != "" && ver != "")
+          print name, ver
+      }
+    ' "$YLOCK"
+  )"
+
+  while read -r NAME VER; do
+    [ -z "$NAME" ] || [ -z "$VER" ] && continue
+
+    if awk -v n="$NAME" -v v="$VER" '
+        $1 == n && $2 == v { found=1 }
+        END { exit found ? 0 : 1 }
+      ' "$TMP_VULN"; then
+      FOUND_ANY=1
+      echo "VULNERABLE: $NAME@$VER (in $YLOCK)"
+    fi
+  done <<< "$INSTALLED_PACKAGES"
+
+done < <(find "$DIR" -type f -name "yarn.lock")
+
 if (( FOUND_ANY )); then
   printf "\n[EMERGENCY] Vulnerable packages found.\n" >&2
   exit 1
