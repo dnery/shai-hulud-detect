@@ -28,8 +28,19 @@ TMP_CSV="$(mktemp)"
 TMP_VULN="$(mktemp)"
 trap 'rm -f "$TMP_CSV" "$TMP_VULN"' EXIT
 
-printf "\nDownloading vulnerability CSV from Github... ($CSV_URL)\n\n" >&2
-curl -fsSL "$CSV_URL" -o "$TMP_CSV"
+# Decide CSV source: env var or download
+if [ -n "${SHAI_HULUD_CSV:-}" ]; then
+  if [ ! -f "$SHAI_HULUD_CSV" ]; then
+    echo "Error: SHAI_HULUD_CSV is set, but file does not exist: $SHAI_HULUD_CSV" >&2
+    exit 2
+  fi
+  CSV_SOURCE="$SHAI_HULUD_CSV"
+  printf "\nUsing vulnerability CSV from SHAI_HULUD_CSV: %s\n\n" "$CSV_SOURCE" >&2
+else
+  CSV_SOURCE="$TMP_CSV"
+  printf "\nDownloading vulnerability CSV from Github... (%s)\n\n" "$CSV_URL" >&2
+  curl -fsSL "$CSV_URL" -o "$CSV_SOURCE"
+fi
 
 # Normalize CSV -> lines: "package<TAB>version"
 # Handles cases like: "@scope/pkg","= 1.2.3 || = 1.2.4"
@@ -44,7 +55,7 @@ awk -F, 'NR>1 {
       print pkg "\t" parts[i];
     }
   }
-}' "$TMP_CSV" > "$TMP_VULN"
+}' "$CSV_SOURCE" > "$TMP_VULN"
 
 # jq program reused for each npm package-lock.json
 read -r -d '' JQ_PROG <<'EOF' || true

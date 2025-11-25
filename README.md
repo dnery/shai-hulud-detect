@@ -14,6 +14,10 @@ A simple bash script that will scan your project dir for package-lock.json & pnp
 
     ./shai-hulud-2-check.sh /Users/jdoe/my/project
 
+If you prefer to use a local copy of the vulnerability CSV, set the `SHAI_HULUD_CSV` environment variable:
+
+    SHAI_HULUD_CSV=./shai-hulud-2-packages.csv ./shai-hulud-2-check.sh /Users/jdoe/my/project
+
 #### Example output
 
     Downloading vulnerability CSV from Github... (https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv)
