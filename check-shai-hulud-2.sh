@@ -13,7 +13,8 @@ set -euo pipefail
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 # SCRIPT OR THE USE OR OTHER DEALINGS IN THE SCRIPT.
 
-CSV_URL="https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv"
+WIZ_RESEARCH_CSV_URL="https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv"
+DD_CONSOLIDATED_IOCS_CSV_URL="https://raw.githubusercontent.com/DataDog/indicators-of-compromise/refs/heads/main/shai-hulud-2.0/consolidated_iocs.csv"
 
 [ $# -eq 1 ] || { echo "Usage: $0 DIRECTORY" >&2; exit 2; }
 DIR="$1"
@@ -24,9 +25,10 @@ for cmd in jq curl find awk yq; do
 done
 
 # Temp files
+TMP_DD="$(mktemp)"
 TMP_CSV="$(mktemp)"
 TMP_VULN="$(mktemp)"
-trap 'rm -f "$TMP_CSV" "$TMP_VULN"' EXIT
+trap 'rm -f "$TMP_CSV" "$TMP_VULN" "$TMP_DD"' EXIT
 
 # Decide CSV source: env var or download
 if [ -n "${SHAI_HULUD_CSV:-}" ]; then
@@ -38,8 +40,8 @@ if [ -n "${SHAI_HULUD_CSV:-}" ]; then
   printf "\nUsing vulnerability CSV from SHAI_HULUD_CSV: %s\n\n" "$CSV_SOURCE" >&2
 else
   CSV_SOURCE="$TMP_CSV"
-  printf "\nDownloading vulnerability CSV from Github... (%s)\n\n" "$CSV_URL" >&2
-  curl -fsSL "$CSV_URL" -o "$CSV_SOURCE"
+  printf "\nDownloading vulnerability CSV from Github... (%s)\n\n" "$WIZ_RESEARCH_CSV_URL" >&2
+  curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$CSV_SOURCE"
 fi
 
 # Normalize CSV -> lines: "package<TAB>version"
@@ -56,6 +58,31 @@ awk -F, 'NR>1 {
     }
   }
 }' "$CSV_SOURCE" > "$TMP_VULN"
+
+# Download and process Datadog CSV
+printf "\nDownloading Datadog vulnerability CSV... (%s)\n\n" "$DD_CONSOLIDATED_IOCS_CSV_URL" >&2
+curl -fsSL "$DD_CONSOLIDATED_IOCS_CSV_URL" -o "$TMP_DD"
+
+# Normalize Datadog CSV -> append to TMP_VULN
+# Removes CRLF, strips header, strips sources column, then parses pkg/ver
+tr -d '\r' < "$TMP_DD" | sed '1d; s/,"[^"]*"$//' | awk '{
+  idx = index($0, ",");
+  if (idx > 0) {
+    pkg = substr($0, 1, idx-1);
+    ver_str = substr($0, idx+1);
+    gsub(/"/, "", ver_str);
+    n = split(ver_str, vers, ",");
+    for (i=1; i<=n; i++) {
+      gsub(/^ */, "", vers[i]);
+      gsub(/ *$/, "", vers[i]);
+      if (vers[i] != "") {
+        print pkg "\t" vers[i];
+      }
+    }
+  }
+}' >> "$TMP_VULN"
+
+cat "$TMP_VULN"
 
 # jq program reused for each npm package-lock.json
 read -r -d '' JQ_PROG <<'EOF' || true
