@@ -73,6 +73,10 @@ log_info "Verifying repositories in $USER_DIR..."
 REPOS=()
 while IFS= read -r dir; do
     if [ -d "$dir/.git" ]; then
+        if [[ "$(basename "$dir")" == "shai-hulud-detect" ]]; then
+             log_info "Skipping self-repo: $dir"
+             continue
+        fi
         REPOS+=("$dir")
     fi
 done < <(find "$USER_DIR" -mindepth 1 -maxdepth 1 -type d)

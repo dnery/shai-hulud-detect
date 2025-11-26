@@ -93,8 +93,6 @@ tr -d '\r' < "$TMP_DD" | sed '1d; s/,"[^"]*"$//' | awk '{
   }
 }' >> "$TMP_VULN"
 
-cat "$TMP_VULN"
-
 # jq program reused for each npm package-lock.json
 read -r -d '' JQ_PROG <<'EOF' || true
   if .packages then
