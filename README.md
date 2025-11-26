@@ -1,39 +1,47 @@
-# shai-hulud-2-check
+# Shai Hulud Detector
 
-A simple bash script that will scan your project dir for package-lock.json, pnpm-lock.yaml & yarn.lock files that contain vulnerabilities listed in the wiz-sec vulnerability CSV.
+This tool helps Dandy employees scan their local development environments for **Shai Hulud** supply chain vulnerabilities.
+
+It runs a comprehensive check across your cloned repositories and your home directory to ensure your system is clean.
+
+## Quick Start (MacBook)
+
+Run the following command in your terminal:
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/check-system.sh)
+```
+
+Follow the interactive prompts to complete the scan.
+
+## What does this do?
+
+1.  **Repository Scan**: It asks for the location of your code (e.g., `~/orthly`), detects all git repositories within, and scans their lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) for known malicious packages associated with the Shai Hulud attack.
+2.  **System Scan**: It checks your home directory for known malicious indicators:
+    - Files named `bun_environment.js`
+    - Directories named `.truffler-cache`
 
 ## Requirements
 
-    curl - Download vulnerability data from remote source
-    jq   - Parse and process JSON data from package-lock.json
-    find - Locate package-lock.json & pnpm-lock.yaml files in the project directory
-    awk  - Process and filter CSV vulnerability data
-    yq   - Parse and handle YAML configuration files
+- **macOS** (standard employee MacBook)
+- **curl** & **bash** (pre-installed on macOS)
+- **fd** (Optional but recommended for faster scanning)
+  - Install via Homebrew: `brew install fd`
 
-## Usage
+## Manual Usage
 
-    ./shai-hulud-2-check.sh /Users/jdoe/my/project
+If you prefer to run the scanner manually against a specific directory without the interactive wizard:
 
-If you prefer to use a local copy of the vulnerability CSV, set the `SHAI_HULUD_CSV` environment variable:
+```bash
+# Clone the repo
+git clone https://github.com/dnery/shai-hulud-detect.git
+cd shai-hulud-detect
 
-    SHAI_HULUD_CSV=./shai-hulud-2-packages.csv ./shai-hulud-2-check.sh /Users/jdoe/my/project
+# Run the check script directly
+./check-shai-hulud-2.sh /path/to/your/project
+```
 
-#### Example output
+## References
 
-    Downloading vulnerability CSV from Github... (https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv)
-
-    Scanning: /Users/jdoe/my/project/package-lock.json
-    VULNERABLE: @accordproject/concerto-analysis@3.24.1 (in /Users/jdoe/my/project/package-lock.json)
-    Scanning: /Users/jdoe/my/project/package-lock.json
-    
-    [EMERGENCY] Vulnerable packages found.
-
-## Disclaimer
-
-This script is provided "AS IS" without any warranties. The author assumes no liability for any damages or losses arising from the use of this script.
-
-## More Info
-
-https://www.aikido.dev/blog/shai-hulud-strikes-again-hitting-zapier-ensdomains
-
-https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack
+- [Wiz Research: Shai Hulud 2.0](https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack)
+- [Aikido: Shai Hulud Strikes Again](https://www.aikido.dev/blog/shai-hulud-strikes-again-hitting-zapier-ensdomains)
