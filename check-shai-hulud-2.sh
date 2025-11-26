@@ -16,9 +16,20 @@ set -euo pipefail
 WIZ_RESEARCH_CSV_URL="https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv"
 DD_CONSOLIDATED_IOCS_CSV_URL="https://raw.githubusercontent.com/DataDog/indicators-of-compromise/refs/heads/main/shai-hulud-2.0/consolidated_iocs.csv"
 
-[ $# -eq 1 ] || { echo "Usage: $0 DIRECTORY" >&2; exit 2; }
-DIR="$1"
-[ -d "$DIR" ] || { echo "Error: not a directory: $DIR" >&2; exit 2; }
+if [ $# -eq 0 ]; then
+  echo "Usage: $0 DIRECTORY..." >&2
+  exit 2
+fi
+
+DIRS=()
+for arg in "$@"; do
+  if [ -d "$arg" ]; then
+    DIRS+=("$arg")
+  else
+    echo "Error: not a directory: $arg" >&2
+    exit 2
+  fi
+done
 
 for cmd in jq curl find awk yq; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd is required." >&2; exit 2; }
@@ -123,7 +134,7 @@ while IFS= read -r LOCKFILE; do
     fi
   done <<< "$INSTALLED_PACKAGES"
 
-done < <(find "$DIR" -type f -name "package-lock.json")
+done < <(find "${DIRS[@]}" -type f -name "package-lock.json")
 
 # Find and scan all pnpm-lock.yaml files recursively
 while IFS= read -r PLOCK; do
@@ -167,7 +178,7 @@ while IFS= read -r PLOCK; do
     fi
   done <<< "$INSTALLED_PACKAGES"
 
-done < <(find "$DIR" -type f -name "pnpm-lock.yaml")
+done < <(find "${DIRS[@]}" -type f -name "pnpm-lock.yaml")
 
 # Find and scan all yarn.lock files recursively
 while IFS= read -r YLOCK; do
@@ -212,7 +223,7 @@ while IFS= read -r YLOCK; do
     fi
   done <<< "$INSTALLED_PACKAGES"
 
-done < <(find "$DIR" -type f -name "yarn.lock")
+done < <(find "${DIRS[@]}" -type f -name "yarn.lock")
 
 if (( FOUND_ANY )); then
   printf "\n[EMERGENCY] Vulnerable packages found.\n" >&2
