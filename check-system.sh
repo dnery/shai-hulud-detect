@@ -51,7 +51,7 @@ fi
 # 1. Ask for directory
 log_info "Welcome to the Shai Hulud System Checker."
 echo "Please enter the directory where your 'orthly' repositories are located."
-read -p "Directory Path: " USER_DIR
+read -p "Directory Path (e.g. ~/code): " USER_DIR
 
 # Expand tilde manually if needed (shell usually handles it if not quoted, but read stores it literally)
 if [[ "$USER_DIR" == ~* ]]; then
@@ -104,31 +104,54 @@ trap cleanup EXIT
 CHECK_SCRIPT_2="$TMP_DIR/check-shai-hulud-2.sh"
 URL_CHECK_2="https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/check-shai-hulud-2.sh"
 
-log_info "Downloading check-shai-hulud-2.sh from dnery/shai-hulud-detect..."
-if curl -fsSL "$URL_CHECK_2" -o "$CHECK_SCRIPT_2"; then
-    chmod +x "$CHECK_SCRIPT_2"
-    log_info "Running check-shai-hulud-2.sh against repositories..."
-    "$CHECK_SCRIPT_2" "${REPOS[@]}" || log_warn "check-shai-hulud-2.sh reported potential issues."
+echo # newline
+read -p "Run check-shai-hulud-2.sh? [Y/n] " -r
+if [[ $REPLY =~ ^[Nn]$ ]]; then
+    log_info "Skipping check-shai-hulud-2.sh"
 else
-    log_error "Failed to download check-shai-hulud-2.sh"
+    log_info "Downloading check-shai-hulud-2.sh from dnery/shai-hulud-detect..."
+    if curl -fsSL "$URL_CHECK_2" -o "$CHECK_SCRIPT_2"; then
+        chmod +x "$CHECK_SCRIPT_2"
+        log_info "Running check-shai-hulud-2.sh against repositories..."
+        "$CHECK_SCRIPT_2" "${REPOS[@]}" || log_warn "check-shai-hulud-2.sh reported potential issues."
+    else
+        log_error "Failed to download check-shai-hulud-2.sh"
+    fi
 fi
 
 # 4. Pull and run shai-hulud-detector.sh
 DETECTOR_SCRIPT="$TMP_DIR/shai-hulud-detector.sh"
 URL_DETECTOR="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/shai-hulud-detector.sh"
+URL_PACKAGES="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/compromised-packages.txt"
+PACKAGES_FILE="$TMP_DIR/compromised-packages.txt"
 
-log_info "Downloading shai-hulud-detector.sh from Cobenian/shai-hulud-detect..."
-if curl -fsSL "$URL_DETECTOR" -o "$DETECTOR_SCRIPT"; then
-    chmod +x "$DETECTOR_SCRIPT"
-    log_info "Running shai-hulud-detector.sh..."
-    
-    # Iterate over repos as we are unsure if it supports multiple args
-    for repo in "${REPOS[@]}"; do
-        echo "Checking $repo with shai-hulud-detector.sh..."
-        "$DETECTOR_SCRIPT" "$repo" || log_warn "Issue detected in $repo by shai-hulud-detector.sh"
-    done
+echo # newline
+read -p "Run shai-hulud-detector.sh? (Slow operation) [y/N] " -r
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    log_info "Skipping shai-hulud-detector.sh"
 else
-    log_warn "Failed to download shai-hulud-detector.sh from $URL_DETECTOR. Skipping this check."
+    log_info "Downloading shai-hulud-detector.sh and compromised-packages.txt from Cobenian/shai-hulud-detect..."
+
+    # Download the packages list first so the script finds it
+    if curl -fsSL "$URL_PACKAGES" -o "$PACKAGES_FILE"; then
+        log_info "Downloaded compromised-packages.txt successfully."
+    else
+        log_warn "Failed to download compromised-packages.txt. The script might rely on embedded list."
+    fi
+
+    if curl -fsSL "$URL_DETECTOR" -o "$DETECTOR_SCRIPT"; then
+        chmod +x "$DETECTOR_SCRIPT"
+        log_info "Running shai-hulud-detector.sh..."
+        
+        # Iterate over repos as we are unsure if it supports multiple args
+        for repo in "${REPOS[@]}"; do
+            echo "Checking $repo with shai-hulud-detector.sh..."
+            # Run from TMP_DIR so it finds the packages file
+            (cd "$TMP_DIR" && "./$(basename "$DETECTOR_SCRIPT")" "$repo") || log_warn "Issue detected in $repo by shai-hulud-detector.sh"
+        done
+    else
+        log_warn "Failed to download shai-hulud-detector.sh from $URL_DETECTOR. Skipping this check."
+    fi
 fi
 
 # 5. fd checks
@@ -148,17 +171,24 @@ if [ "$HAS_FD" -eq 1 ]; then
     # Malicious files might be anywhere.
     # So `fd -u` (or `fd -H -I`) is safer for detection.
     
-    if fd -u -g "bun_environment.js" "$HOME" | grep -q .; then
+    # Exclude patterns for self-repos
+    EXCLUDE_ARGS=(
+      --exclude "shai-hulud-detect"
+      --exclude "shai-hulud-detector"
+      --exclude "shai-hulud-detect-fork"
+    )
+
+    if fd -u -g "bun_environment.js" "${EXCLUDE_ARGS[@]}" "$HOME" | grep -q .; then
         log_error "Found 'bun_environment.js' in home directory!"
-        fd -u -g "bun_environment.js" "$HOME"
+        fd -u -g "bun_environment.js" "${EXCLUDE_ARGS[@]}" "$HOME"
     else
         log_info "No 'bun_environment.js' found."
     fi
     
     # .truffler-cache
-    if fd -u -t d -g ".truffler-cache" "$HOME" | grep -q .; then
+    if fd -u -t d -g ".truffler-cache" "${EXCLUDE_ARGS[@]}" "$HOME" | grep -q .; then
         log_error "Found '.truffler-cache' directory in home directory!"
-        fd -u -t d -g ".truffler-cache" "$HOME"
+        fd -u -t d -g ".truffler-cache" "${EXCLUDE_ARGS[@]}" "$HOME"
     else
         log_info "No '.truffler-cache' found."
     fi

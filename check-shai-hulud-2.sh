@@ -16,8 +16,16 @@ set -euo pipefail
 WIZ_RESEARCH_CSV_URL="https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv"
 DD_CONSOLIDATED_IOCS_CSV_URL="https://raw.githubusercontent.com/DataDog/indicators-of-compromise/refs/heads/main/shai-hulud-2.0/consolidated_iocs.csv"
 
+# Colors
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m' # No Color
+
 if [ $# -eq 0 ]; then
-  echo "Usage: $0 DIRECTORY..." >&2
+  echo "${RED}Usage: $0 DIRECTORY...${NC}" >&2
   exit 2
 fi
 
@@ -26,13 +34,13 @@ for arg in "$@"; do
   if [ -d "$arg" ]; then
     DIRS+=("$arg")
   else
-    echo "Error: not a directory: $arg" >&2
+    echo "${RED}Error: not a directory: $arg${NC}" >&2
     exit 2
   fi
 done
 
 for cmd in jq curl find awk yq; do
-  command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd is required." >&2; exit 2; }
+  command -v "$cmd" >/dev/null 2>&1 || { echo "${RED}Error: $cmd is required.${NC}" >&2; exit 2; }
 done
 
 # Temp files
@@ -44,14 +52,14 @@ trap 'rm -f "$TMP_CSV" "$TMP_VULN" "$TMP_DD"' EXIT
 # Decide CSV source: env var or download
 if [ -n "${SHAI_HULUD_CSV:-}" ]; then
   if [ ! -f "$SHAI_HULUD_CSV" ]; then
-    echo "Error: SHAI_HULUD_CSV is set, but file does not exist: $SHAI_HULUD_CSV" >&2
+    echo "${RED}Error: SHAI_HULUD_CSV is set, but file does not exist: $SHAI_HULUD_CSV${NC}" >&2
     exit 2
   fi
   CSV_SOURCE="$SHAI_HULUD_CSV"
-  printf "\n>> Using vulnerability CSV from SHAI_HULUD_CSV: %s\n" "$CSV_SOURCE" >&2
+  printf "\n${CYAN}>> Using vulnerability CSV from SHAI_HULUD_CSV: %s${NC}\n" "$CSV_SOURCE" >&2
 else
   CSV_SOURCE="$TMP_CSV"
-  printf "\n>> Downloading vulnerability CSV from Github... (%s)\n" "$WIZ_RESEARCH_CSV_URL" >&2
+  printf "\n${CYAN}>> Downloading vulnerability CSV from Github... (%s)${NC}\n" "$WIZ_RESEARCH_CSV_URL" >&2
   curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$CSV_SOURCE"
 fi
 
@@ -71,7 +79,7 @@ awk -F, 'NR>1 {
 }' "$CSV_SOURCE" > "$TMP_VULN"
 
 # Download and process Datadog CSV
-printf "\n>> Downloading Datadog vulnerability CSV... (%s)\n" "$DD_CONSOLIDATED_IOCS_CSV_URL" >&2
+printf "\n${CYAN}>> Downloading Datadog vulnerability CSV... (%s)${NC}\n" "$DD_CONSOLIDATED_IOCS_CSV_URL" >&2
 curl -fsSL "$DD_CONSOLIDATED_IOCS_CSV_URL" -o "$TMP_DD"
 
 # Normalize Datadog CSV -> append to TMP_VULN
@@ -112,11 +120,12 @@ read -r -d '' JQ_PROG <<'EOF' || true
   end
 EOF
 
+printf "\n${CYAN}>> Beginning scans...${NC}\n" >&2
 FOUND_ANY=0
 
 # Find and scan all package-lock.json files recursively
 while IFS= read -r LOCKFILE; do
-  echo "Scanning npm lockfile: $LOCKFILE" >&2
+  echo "${BLUE}Scanning npm lockfile: $LOCKFILE${NC}" >&2
 
   INSTALLED_PACKAGES="$(jq -r "$JQ_PROG" "$LOCKFILE" 2>/dev/null || true)"
 
@@ -128,7 +137,7 @@ while IFS= read -r LOCKFILE; do
         END { exit found ? 0 : 1 }
       ' "$TMP_VULN"; then
       FOUND_ANY=1
-      echo "VULNERABLE: $NAME@$VER (in $LOCKFILE)"
+      echo "${RED}VULNERABLE: $NAME@$VER (in $LOCKFILE)${NC}"
     fi
   done <<< "$INSTALLED_PACKAGES"
 
@@ -136,7 +145,7 @@ done < <(find "${DIRS[@]}" -type f -name "package-lock.json")
 
 # Find and scan all pnpm-lock.yaml files recursively
 while IFS= read -r PLOCK; do
-  echo "Scanning pnpm lockfile: $PLOCK" >&2
+  echo "${BLUE}Scanning pnpm lockfile: $PLOCK${NC}" >&2
 
   # Extract "name version" pairs from pnpm-lock.yaml
   # .packages keys look like:
@@ -172,7 +181,7 @@ while IFS= read -r PLOCK; do
         END { exit found ? 0 : 1 }
       ' "$TMP_VULN"; then
       FOUND_ANY=1
-      echo "VULNERABLE: $NAME@$VER (in $PLOCK)"
+      echo "${RED}VULNERABLE: $NAME@$VER (in $PLOCK)${NC}"
     fi
   done <<< "$INSTALLED_PACKAGES"
 
@@ -180,7 +189,7 @@ done < <(find "${DIRS[@]}" -type f -name "pnpm-lock.yaml")
 
 # Find and scan all yarn.lock files recursively
 while IFS= read -r YLOCK; do
-  echo "Scanning yarn lockfile: $YLOCK" >&2
+  echo "${BLUE}Scanning yarn lockfile: $YLOCK${NC}" >&2
 
   INSTALLED_PACKAGES="$(
     awk '
@@ -217,16 +226,16 @@ while IFS= read -r YLOCK; do
         END { exit found ? 0 : 1 }
       ' "$TMP_VULN"; then
       FOUND_ANY=1
-      echo "VULNERABLE: $NAME@$VER (in $YLOCK)"
+      echo "${RED}VULNERABLE: $NAME@$VER (in $YLOCK)${NC}"
     fi
   done <<< "$INSTALLED_PACKAGES"
 
 done < <(find "${DIRS[@]}" -type f -name "yarn.lock")
 
 if (( FOUND_ANY )); then
-  printf "\n[EMERGENCY] Vulnerable packages found.\n" >&2
+  printf "\n${RED}[EMERGENCY] Vulnerable packages found.${NC}\n" >&2
   exit 1
 else
-  printf "\n[OK] No vulnerable packages detected.\n" >&2
+  printf "\n${GREEN}[OK] No vulnerable packages detected.${NC}\n" >&2
   exit 0
 fi
