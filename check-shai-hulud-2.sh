@@ -48,10 +48,10 @@ if [ -n "${SHAI_HULUD_CSV:-}" ]; then
     exit 2
   fi
   CSV_SOURCE="$SHAI_HULUD_CSV"
-  printf "\nUsing vulnerability CSV from SHAI_HULUD_CSV: %s\n\n" "$CSV_SOURCE" >&2
+  printf "\n>> Using vulnerability CSV from SHAI_HULUD_CSV: %s\n" "$CSV_SOURCE" >&2
 else
   CSV_SOURCE="$TMP_CSV"
-  printf "\nDownloading vulnerability CSV from Github... (%s)\n\n" "$WIZ_RESEARCH_CSV_URL" >&2
+  printf "\n>> Downloading vulnerability CSV from Github... (%s)\n" "$WIZ_RESEARCH_CSV_URL" >&2
   curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$CSV_SOURCE"
 fi
 
@@ -71,7 +71,7 @@ awk -F, 'NR>1 {
 }' "$CSV_SOURCE" > "$TMP_VULN"
 
 # Download and process Datadog CSV
-printf "\nDownloading Datadog vulnerability CSV... (%s)\n\n" "$DD_CONSOLIDATED_IOCS_CSV_URL" >&2
+printf "\n>> Downloading Datadog vulnerability CSV... (%s)\n" "$DD_CONSOLIDATED_IOCS_CSV_URL" >&2
 curl -fsSL "$DD_CONSOLIDATED_IOCS_CSV_URL" -o "$TMP_DD"
 
 # Normalize Datadog CSV -> append to TMP_VULN

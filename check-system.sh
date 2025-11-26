@@ -73,7 +73,7 @@ log_info "Verifying repositories in $USER_DIR..."
 REPOS=()
 while IFS= read -r dir; do
     if [ -d "$dir/.git" ]; then
-        if [[ "$(basename "$dir")" == "shai-hulud-detect" ]]; then
+        if [[ "$(basename "$dir")" == "shai-hulud-detect" || "$(basename "$dir")" == "shai-hulud-detector" || "$(basename "$dir")" == "shai-hulud-detect-fork" ]]; then
              log_info "Skipping self-repo: $dir"
              continue
         fi
