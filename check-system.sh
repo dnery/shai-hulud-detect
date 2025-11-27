@@ -8,6 +8,8 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BRIGHT_BLUE='\033[1;34m'
+BRIGHT_MAGENTA='\033[1;35m'
 NC='\033[0m' # No Color
 
 log_info() {
@@ -50,8 +52,8 @@ fi
 
 # 1. Ask for directory
 log_info "Welcome to the Shai Hulud System Checker."
-echo "Please enter the directory where your 'orthly' repositories are located."
-read -p "Directory Path (e.g. ~/code): " USER_DIR
+echo "Please enter the parent directory where your code repositories are located (e.g. ~/code)."
+read -p "Directory path: " USER_DIR
 
 # Expand tilde manually if needed (shell usually handles it if not quoted, but read stores it literally)
 if [[ "$USER_DIR" == ~* ]]; then
@@ -105,7 +107,11 @@ CHECK_SCRIPT_2="$TMP_DIR/check-shai-hulud-2.sh"
 URL_CHECK_2="https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/check-shai-hulud-2.sh"
 
 echo # newline
-read -p "Run check-shai-hulud-2.sh? [Y/n] " -r
+echo -e "🐛 ${BRIGHT_MAGENTA}Script 1: https://github.com/dnery/shai-hulud-detect/blob/main/scripts/check-shai-hulud-2.sh${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Scans your cloned repository lockfiles for known malicious packages associated with the novel Shai Hulud attack.${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Consolidates latest package lists published by security researchers, ${GREEN}recommended for all users.${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Forked from @opctim's https://github.com/opctim/shai-hulud-2-check script.${NC}"
+read -p "Run script 1? [Y/n] " -r
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     log_info "Skipping check-shai-hulud-2.sh"
 else
@@ -126,7 +132,11 @@ URL_PACKAGES="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/
 PACKAGES_FILE="$TMP_DIR/compromised-packages.txt"
 
 echo # newline
-read -p "Run shai-hulud-detector.sh? (Slow operation) [y/N] " -r
+echo -e "🐛 ${BRIGHT_MAGENTA}Script 2: https://github.com/Cobenian/shai-hulud-detect/blob/main/shai-hulud-detector.sh${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Aside from lockfile checks, does fancy IOC sniffing for suspicious files, patterns and a lot more.${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Very slow paranoid scan, ${RED}NOT recommended unless you already suspect something.${NC}"
+echo -e "  ℹ️ ${BRIGHT_MAGENTA}Sources @Cobenian's https://github.com/Cobenian/shai-hulud-detect script.${NC}"
+read -p "Run script 2? (Very slow) [y/N] " -r
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_info "Skipping shai-hulud-detector.sh"
 else

@@ -1,6 +1,0 @@
-# This is a dummy yarn.lock for testing.
-
-"zapier-platform-core@18.0.3":
-  version "18.0.3"
-  resolved "https://registry.npmjs.org/zapier-platform-core/-/zapier-platform-core-18.0.3.tgz"
-  integrity sha512-FAKEHASH

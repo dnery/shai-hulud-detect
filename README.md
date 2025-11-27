@@ -1,8 +1,13 @@
 # Shai Hulud Detector
 
+![Shai Hulud Detector Banner](banner.png)
+
 This tool helps developers scan their local development environments for **Shai Hulud** supply chain vulnerabilities.
 
-It runs a comprehensive check across your cloned repositories and your home directory to ensure your system is clean.
+It runs modified versions of 2 different scripts across your locally cloned repositories and your home directory to ensure your system is clean. Projects sourced:
+
+- [check-shai-hulud-2.sh from opctim/shai-hulud-2-check](https://github.com/opctim/shai-hulud-2-check)
+- [shai-hulud-detector.sh from Cobenian/shai-hulud-detect](https://github.com/Cobenian/shai-hulud-detect)
 
 ## Quick Start (MacBook)
 
@@ -17,7 +22,8 @@ Follow the interactive prompts to complete the scan.
 ## What does this do?
 
 1.  **Repository Scan**: It asks for the location of your code (e.g., `~/code`), detects all git repositories within, and scans their lockfiles (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`) for known malicious packages associated with the Shai Hulud attack.
-2.  **System Scan**: It checks your home directory for known malicious indicators:
+2.  **Paranoid Checks**: Optionally it runs Cobenian's `shai-hulud-detector.sh` (modified) to run slower paranoid checks for malicious patterns and expressions. Takes a long time to run, so I don't recommend it unless you already suspect something.
+3.  **System Scan**: It checks your home directory for known malicious indicators:
     - Files named `bun_environment.js`
     - Directories named `.truffler-cache`
 
@@ -31,15 +37,19 @@ Follow the interactive prompts to complete the scan.
 
 ## Manual Usage
 
-If you prefer to run the scanner manually against a specific directory without the interactive wizard:
+If you just want to run the base scan against one more directories _without_ the interactive wizard:
 
 ```bash
 # Clone the repo
 git clone https://github.com/dnery/shai-hulud-detect.git
 cd shai-hulud-detect
 
-# Run the coordinator script
-./check-system.sh
+# Optionally specify a CSV containing affected package versions
+# to use as core IOCs (updated lists will be downloaded by default)
+export SHAI_HULUD_CSV="./my-iocs.csv"
+
+# Run the base scan directly
+./scripts/opctim/check-shai-hulud-2.sh ~/code/my-vulnerable-project ~/code/my-other-vulnerable-project
 ```
 
 ## References

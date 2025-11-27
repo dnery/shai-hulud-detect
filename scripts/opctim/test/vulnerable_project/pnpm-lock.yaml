@@ -1,0 +1,13 @@
+lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      zapier-platform-core:
+        specifier: 18.0.3
+        version: 18.0.3
+
+packages:
+  /zapier-platform-core@18.0.3:
+    resolution: { integrity: sha512-FAKEHASH }
+    dependencies: {}
