@@ -8,9 +8,25 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BRIGHT_BLUE='\033[1;34m'
-BRIGHT_MAGENTA='\033[1;35m'
+MAGENTA='\033[1;35m'
 NC='\033[0m' # No Color
+
+# Constants: Upstream Hashes for Drift Detection
+# These are the SHA256 hashes of the *original* scripts at the time of our last manual update.
+# If the upstream script changes, we want to know so we can manually review and pull updates.
+HASH_ORIGINAL_OPCTIM="9526e0e7a11d9d4fc79c52d7f1804d5ef22a9c157f02d90c32afa8012d0d0b10"
+URL_ORIGINAL_OPCTIM="https://raw.githubusercontent.com/opctim/shai-hulud-2-check/main/check-shai-hulud-2.sh"
+
+HASH_ORIGINAL_COBENIAN="1f3f94cfecbfaab20d9cc9252add1136a416e075b58844035b218ed44d2764ce"
+URL_ORIGINAL_COBENIAN="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/shai-hulud-detector.sh"
+
+# Argument Parsing
+DEBUG_MODE=0
+for arg in "$@"; do
+    if [[ "$arg" == "--debug" ]]; then
+        DEBUG_MODE=1
+    fi
+done
 
 log_info() {
     echo -e "${GREEN}[INFO]${NC} $1"
@@ -24,22 +40,49 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+check_upstream_drift() {
+    local name="$1"
+    local url="$2"
+    local expected_hash="$3"
+
+    local current_hash
+    if current_hash=$(curl -sSkL "$url" | shasum -a 256 | awk '{print $1}'); then
+        if [[ "$current_hash" != "$expected_hash" ]]; then
+            log_warn "⚠️ DRIFT DETECTED: The upstream source for $name has changed!"
+            log_warn "   Stored Hash: $expected_hash"
+            log_warn "   Current Hash: $current_hash"
+            log_warn "   Review the most recent changes and update the fork"
+        else
+            log_info "$name is up to date with upstream"
+        fi
+    else
+        log_warn "Failed to check upstream drift for $name (network issue?)"
+    fi
+}
+
 # Check for dependencies
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
-        log_error "$1 is required but not installed."
+        log_error "$1 is required but not installed"
         return 1
     fi
 }
 
 check_dependency curl || exit 1
 check_dependency bash || exit 1
+# shasum is usually available on macOS (part of perl utils or standalone)
+if ! command -v shasum &> /dev/null; then
+    log_warn "shasum command not found, drift checks will be skipped"
+    SKIP_DRIFT=1
+else
+    SKIP_DRIFT=0
+fi
 
 # Check for fd
 if ! command -v fd &> /dev/null; then
-    log_warn "fd is not installed. It is recommended for faster searching."
-    log_warn "You can install it via brew: brew install fd"
-    log_warn "The script will proceed, but the home directory checks will be skipped."
+    log_warn "⚠️ fd is not installed, it is recommended for faster searching"
+    log_warn "   You can install it via brew: ${MAGENTA}brew install fd${NC}"
+    log_warn "   The script will proceed, but the home directory checks will be skipped"
     
     read -p "Continue without fd? [y/N] " -r
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -50,12 +93,31 @@ else
     HAS_FD=1
 fi
 
-# 1. Ask for directory
-log_info "Welcome to the Shai Hulud System Checker."
-echo "Please enter the parent directory where your code repositories are located (e.g. ~/code)."
-read -p "Directory path: " USER_DIR
+# Run drift checks immediately (non-blocking would be nicer but keep it simple)
+if [[ "$SKIP_DRIFT" -eq 0 ]]; then
+    check_upstream_drift "check-shai-hulud-2.sh (opctim)" "$URL_ORIGINAL_OPCTIM" "$HASH_ORIGINAL_OPCTIM"
+    check_upstream_drift "shai-hulud-detector.sh (Cobenian)" "$URL_ORIGINAL_COBENIAN" "$HASH_ORIGINAL_COBENIAN"
+fi
 
-# Expand tilde manually if needed (shell usually handles it if not quoted, but read stores it literally)
+# 1. Ask for directory
+log_info "🐛 Welcome to the Shai Hulud system checker 🐛"
+echo "Please enter the parent directory where your code repositories are located (e.g. ~/code)"
+
+# Autocomplete helper: Use readline with -e to allow basic tab completion
+# -i works in bash 4.0+, but macOS defaults to bash 3.2.
+# We try to detect if -i is supported or fallback to manually suggesting it.
+if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+    read -e -p "Directory path: " -i "$HOME/" USER_DIR
+else
+    # For bash 3.x (macOS default), we can't use -i.
+    # We just show the default and if user hits enter, we use HOME.
+    read -e -p "Directory path [Default: ~/]: " USER_DIR
+    if [[ -z "$USER_DIR" ]]; then
+        USER_DIR="$HOME"
+    fi
+fi
+
+# Expand tilde manually if needed
 if [[ "$USER_DIR" == ~* ]]; then
     USER_DIR="${USER_DIR/#\~/$HOME}"
 fi
@@ -70,13 +132,14 @@ if [ ! -r "$USER_DIR" ]; then
     exit 1
 fi
 
-# Verify it contains cloned projects (look for .git directories in immediate subdirs)
+# Verify it contains cloned projects
 log_info "Verifying repositories in $USER_DIR..."
 REPOS=()
 while IFS= read -r dir; do
     if [ -d "$dir/.git" ]; then
-        if [[ "$(basename "$dir")" == "shai-hulud-detect" || "$(basename "$dir")" == "shai-hulud-detector" || "$(basename "$dir")" == "shai-hulud-detect-fork" ]]; then
-             log_info "Skipping self-repo: $dir"
+        THIS_SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+        if [[ "$(basename "$dir")" == "$THIS_SCRIPT_DIR" ]]; then
+             log_warn "Skipping self-repo: $dir"
              continue
         fi
         REPOS+=("$dir")
@@ -84,7 +147,7 @@ while IFS= read -r dir; do
 done < <(find "$USER_DIR" -mindepth 1 -maxdepth 1 -type d)
 
 if [ ${#REPOS[@]} -eq 0 ]; then
-    log_warn "No git repositories found in immediate subdirectories of $USER_DIR."
+    log_warn "No git repositories found in immediate subdirectories of $USER_DIR"
     read -p "Do you want to proceed checking $USER_DIR recursively instead? [y/N] " -r
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         REPOS=("$USER_DIR")
@@ -92,94 +155,102 @@ if [ ${#REPOS[@]} -eq 0 ]; then
         exit 1
     fi
 else
-    log_info "Found ${#REPOS[@]} repositories to check."
+    log_info "Found ${#REPOS[@]} repositories to check"
 fi
 
-# 2. Setup temp dir
+# Setup locations based on DEBUG_MODE
 TMP_DIR=$(mktemp -d)
 cleanup() {
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
 
-# 3. Pull and run check-shai-hulud-2.sh
-CHECK_SCRIPT_2="$TMP_DIR/check-shai-hulud-2.sh"
-URL_CHECK_2="https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/check-shai-hulud-2.sh"
+if [[ "$DEBUG_MODE" -eq 1 ]]; then
+    log_info "Running in DEBUG MODE - using local scripts."
+    SCRIPT_1_FILE="./scripts/opctim/check-shai-hulud-2.sh"
+    SCRIPT_2_FILE="./scripts/Cobenian/shai-hulud-detector.sh"
+    PACKAGES_FILE="./scripts/Cobenian/compromised-packages.txt"
+    
+    # Validate local files exist
+    if [[ ! -f "$SCRIPT_1_FILE" ]]; then log_error "Debug: $SCRIPT_1_FILE not found"; exit 1; fi
+    if [[ ! -f "$SCRIPT_2_FILE" ]]; then log_error "Debug: $SCRIPT_2_FILE not found"; exit 1; fi
+else
+    # Production Mode - Download from our repo (dnery/shai-hulud-detect)
+    SCRIPT_1_FILE="$TMP_DIR/check-shai-hulud-2.sh"
+    SCRIPT_2_FILE="$TMP_DIR/shai-hulud-detector.sh"
+    PACKAGES_FILE="$TMP_DIR/compromised-packages.txt"
+    
+    # URLs pointing to our fork structure
+    SCRIPT_1_URL="https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/scripts/opctim/check-shai-hulud-2.sh"
+    SCRIPT_2_URL="https://raw.githubusercontent.com/dnery/shai-hulud-detect/main/scripts/Cobenian/shai-hulud-detector.sh"
+    PACKAGES_URL="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/refs/heads/main/compromised-packages.txt"
+fi
 
+# 3. Run check-shai-hulud-2.sh
 echo # newline
-echo -e "🐛 ${BRIGHT_MAGENTA}Script 1: https://github.com/dnery/shai-hulud-detect/blob/main/scripts/check-shai-hulud-2.sh${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Scans your cloned repository lockfiles for known malicious packages associated with the novel Shai Hulud attack.${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Consolidates latest package lists published by security researchers, ${GREEN}recommended for all users.${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Forked from @opctim's https://github.com/opctim/shai-hulud-2-check script.${NC}"
+log_info "🐛 Script 1: ${MAGENTA}check-shai-hulud-2.sh${NC}"
+log_info "ℹ️ Scans lockfiles for known malicious package versions."
+log_info "ℹ️ Consolidates latest security IOCs. ${GREEN}Recommended for all users."
 read -p "Run script 1? [Y/n] " -r
 if [[ $REPLY =~ ^[Nn]$ ]]; then
     log_info "Skipping check-shai-hulud-2.sh"
 else
-    log_info "Downloading check-shai-hulud-2.sh from dnery/shai-hulud-detect..."
-    if curl -fsSL "$URL_CHECK_2" -o "$CHECK_SCRIPT_2"; then
-        chmod +x "$CHECK_SCRIPT_2"
-        log_info "Running check-shai-hulud-2.sh against repositories..."
-        "$CHECK_SCRIPT_2" "${REPOS[@]}" || log_warn "check-shai-hulud-2.sh reported potential issues."
-    else
-        log_error "Failed to download check-shai-hulud-2.sh"
+    if [[ "$DEBUG_MODE" -eq 0 ]]; then
+        log_info "Downloading check-shai-hulud-2.sh..."
+        if curl -fsSL "$SCRIPT_1_URL" -o "$SCRIPT_1_FILE"; then
+            chmod +x "$SCRIPT_1_FILE"
+        else
+            log_error "Failed to download check-shai-hulud-2.sh"
+            # Skipping execution if download failed
+            SCRIPT_1_FILE=""
+        fi
+    fi
+
+    if [[ -n "$SCRIPT_1_FILE" ]]; then
+        log_info "Running check-shai-hulud-2.sh..."
+        "$SCRIPT_1_FILE" "${REPOS[@]}" || log_warn "Issues detected by check-shai-hulud-2.sh"
     fi
 fi
 
-# 4. Pull and run shai-hulud-detector.sh
-DETECTOR_SCRIPT="$TMP_DIR/shai-hulud-detector.sh"
-URL_DETECTOR="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/shai-hulud-detector.sh"
-URL_PACKAGES="https://raw.githubusercontent.com/Cobenian/shai-hulud-detect/main/compromised-packages.txt"
-PACKAGES_FILE="$TMP_DIR/compromised-packages.txt"
-
+# 4. Run shai-hulud-detector.sh
 echo # newline
-echo -e "🐛 ${BRIGHT_MAGENTA}Script 2: https://github.com/Cobenian/shai-hulud-detect/blob/main/shai-hulud-detector.sh${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Aside from lockfile checks, does fancy IOC sniffing for suspicious files, patterns and a lot more.${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Very slow paranoid scan, ${RED}NOT recommended unless you already suspect something.${NC}"
-echo -e "  ℹ️ ${BRIGHT_MAGENTA}Sources @Cobenian's https://github.com/Cobenian/shai-hulud-detect script.${NC}"
-read -p "Run script 2? (Very slow) [y/N] " -r
+log_info "🐛 Script 2: ${MAGENTA}shai-hulud-detector.sh${NC}"
+log_info "ℹ️ Deep scan for IOCs, suspicious files, and patterns."
+log_info "ℹ️ Very slow paranoid scan. ${RED}Not recommended unless you want have time to spare."
+read -p "Run script 2? [y/N] " -r
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_info "Skipping shai-hulud-detector.sh"
 else
-    log_info "Downloading shai-hulud-detector.sh and compromised-packages.txt from Cobenian/shai-hulud-detect..."
-
-    # Download the packages list first so the script finds it
-    if curl -fsSL "$URL_PACKAGES" -o "$PACKAGES_FILE"; then
-        log_info "Downloaded compromised-packages.txt successfully."
+    if [[ "$DEBUG_MODE" -eq 0 ]]; then
+        log_info "Downloading shai-hulud-detector.sh and assets..."
+        
+        # Download packages file
+        curl -fsSL "$PACKAGES_URL" -o "$PACKAGES_FILE" || log_error "Failed to download packages list"
+        
+        # Download script
+        if curl -fsSL "$SCRIPT_2_URL" -o "$SCRIPT_2_FILE"; then
+            chmod +x "$SCRIPT_2_FILE"
+        else
+            log_error "Failed to download shai-hulud-detector.sh"
+            SCRIPT_2_FILE=""
+        fi
     else
-        log_warn "Failed to download compromised-packages.txt. The script might rely on embedded list."
+        cp "$SCRIPT_2_FILE" "$TMP_DIR/shai-hulud-detector.sh"
+        cp "$PACKAGES_FILE" "$TMP_DIR/compromised-packages.txt"
+        SCRIPT_2_FILE="$TMP_DIR/shai-hulud-detector.sh"
+        PACKAGES_FILE="$TMP_DIR/compromised-packages.txt"
     fi
 
-    if curl -fsSL "$URL_DETECTOR" -o "$DETECTOR_SCRIPT"; then
-        chmod +x "$DETECTOR_SCRIPT"
+    if [[ -n "$SCRIPT_2_FILE" ]]; then
         log_info "Running shai-hulud-detector.sh..."
-        
-        # Iterate over repos as we are unsure if it supports multiple args
-        for repo in "${REPOS[@]}"; do
-            echo "Checking $repo with shai-hulud-detector.sh..."
-            # Run from TMP_DIR so it finds the packages file
-            (cd "$TMP_DIR" && "./$(basename "$DETECTOR_SCRIPT")" "$repo") || log_warn "Issue detected in $repo by shai-hulud-detector.sh"
-        done
-    else
-        log_warn "Failed to download shai-hulud-detector.sh from $URL_DETECTOR. Skipping this check."
+        # Ensure we run from the dir containing compromised-packages.txt
+        (cd "$(dirname "$PACKAGES_FILE")" && "./$(basename "$SCRIPT_2_FILE")" "${REPOS[@]}") || log_warn "Issues detected by shai-hulud-detector.sh"
     fi
 fi
 
 # 5. fd checks
 if [ "$HAS_FD" -eq 1 ]; then
     log_info "Running fd checks on home directory ($HOME)..."
-    
-    # bun_environment.js
-    # -H: search hidden files/directories
-    # -I: respect ignore files (default), maybe we want -u (unrestricted) to search everywhere?
-    # The prompt says "anywhere in their home folder tree".
-    # fd default ignores .gitignore patterns. We probably want to search ignored files too just in case.
-    # So -I (no-ignore) or -u (unrestricted: no-ignore + hidden).
-    # -H enables hidden.
-    # -I disables .gitignore.
-    # Let's use -H -I (or -u which implies -I).
-    # Actually, let's stick to -H. If it's in a gitignored folder but not hidden, we might miss it if we respect gitignore.
-    # Malicious files might be anywhere.
-    # So `fd -u` (or `fd -H -I`) is safer for detection.
     
     # Exclude patterns for self-repos
     EXCLUDE_ARGS=(
@@ -189,20 +260,18 @@ if [ "$HAS_FD" -eq 1 ]; then
     )
 
     if fd -u -g "bun_environment.js" "${EXCLUDE_ARGS[@]}" "$HOME" | grep -q .; then
-        log_error "Found 'bun_environment.js' in home directory!"
+        log_critical "Found 'bun_environment.js' in home directory!"
         fd -u -g "bun_environment.js" "${EXCLUDE_ARGS[@]}" "$HOME"
     else
-        log_info "No 'bun_environment.js' found."
+        log_success "No 'bun_environment.js' found"
     fi
     
-    # .truffler-cache
     if fd -u -t d -g ".truffler-cache" "${EXCLUDE_ARGS[@]}" "$HOME" | grep -q .; then
-        log_error "Found '.truffler-cache' directory in home directory!"
+        log_critical "Found '.truffler-cache' directory in home directory!"
         fd -u -t d -g ".truffler-cache" "${EXCLUDE_ARGS[@]}" "$HOME"
     else
-        log_info "No '.truffler-cache' found."
+        log_success "No '.truffler-cache' found"
     fi
 fi
 
-log_info "System check complete."
-
+log_info "System check complete"

@@ -8,14 +8,13 @@ DD_LABS_IOCS_CSV_URL="https://raw.githubusercontent.com/DataDog/indicators-of-co
 RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
-BRIGHT_BLUE=$'\033[1;34m'
+BLUE=$'\033[1;34m'
 BRIGHT_MAGENTA=$'\033[1;35m'
-BLUE=$'\033[0;34m'
 CYAN=$'\033[0;36m'
 CR=$'\r\033[K'
 NC=$'\033[0m' # No Color
 
-# Logging helpers
+# Output helpers
 log_info() {
     echo "${GREEN}[INFO]${NC} $1"
 }
@@ -34,21 +33,15 @@ log_success() {
 log_critical() {
     echo "${RED}[CRITICAL] $1${NC}"
 }
-carriage_return() {
-    echo -ne "$CR"
+blank_line() {  
+    echo ""
 }
-
-# Function: show_progress
-# Purpose: Display real-time progress indicator for file scanning operations
-# Args: $1 = current files processed, $2 = total files to process
-# Modifies: None (outputs to stderr with ANSI escape codes)
-# Returns: Prints "X / Y checked (Z %)" with line clearing
-show_progress() {
+progress() {
     local current=$1
     local total=$2
     local percent=0
     [[ $total -gt 0 ]] && percent=$((current * 100 / total))
-    echo -ne "$current / $total checked ($percent %)${CR}"
+    echo -ne "${CR}${CYAN}$current / $total packages checked ($percent %)${NC}"
 }
 
 # Check for dependencies
@@ -91,10 +84,10 @@ for arg in "$@"; do
 done
 
 # Temp files
-TMP_DD="$(mktemp)"
+TMP_DL="$(mktemp)"
+TMP_WR="$(mktemp)"
 TMP_CSV="$(mktemp)"
-TMP_VULN="$(mktemp)"
-trap 'rm -f "$TMP_CSV" "$TMP_VULN" "$TMP_DD"' EXIT
+trap 'rm -f "$TMP_WR" "$TMP_CSV" "$TMP_DL"' EXIT
 
 # Function to find files (abstracts fd vs find)
 find_files() {
@@ -130,45 +123,52 @@ download_vulnerability_data() {
       log_info "Using vulnerability CSV from SHAI_HULUD_CSV: $CSV_SOURCE"
     else
       CSV_SOURCE="$TMP_CSV"
-      log_info "Downloading Wiz Research affected packages CSV: $WIZ_RESEARCH_CSV_URL"
-      curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$CSV_SOURCE"
-    fi
+      # Download and process Wiz Research CSV -> TMP_WR
+      log_info "Downloading Wiz Research affected packages CSV: ${BLUE}$WIZ_RESEARCH_CSV_URL${NC}"
+      curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$TMP_WR"
 
-    # Normalize CSV -> lines: "package<TAB>version"
-    awk -F, 'NR>1 {
-      gsub(/"/,"");          # drop quotes
-      pkg=$1; vers=$2;
-      n=split(vers, parts, /\|\|/);
-      for (i=1; i<=n; i++) {
-        gsub(/^ *= */,"", parts[i]); # strip leading " = "
-        gsub(/ *$/,"",  parts[i]);   # trim trailing spaces
-        if (parts[i] != "") {
-          print pkg "\t" parts[i];
-        }
-      }
-    }' "$CSV_SOURCE" > "$TMP_VULN"
-
-    # Download and process Datadog CSV
-    log_info "Downloading DataDog Labs consolidated IOCs CSV: $DD_LABS_IOCS_CSV_URL"
-    curl -fsSL "$DD_LABS_IOCS_CSV_URL" -o "$TMP_DD"
-
-    # Normalize Datadog CSV -> append to TMP_VULN
-    tr -d '\r' < "$TMP_DD" | sed '1d; s/,"[^"]*"$//' | awk '{
-      idx = index($0, ",");
-      if (idx > 0) {
-        pkg = substr($0, 1, idx-1);
-        ver_str = substr($0, idx+1);
-        gsub(/"/, "", ver_str);
-        n = split(ver_str, vers, ",");
+      # Normalize TMP_WR -> lines: "package<TAB>version" -> truncate to CSV_SOURCE
+      awk -F, 'NR>1 {
+        gsub(/"/,"");                   # drop quotes around package name
+        pkg=$1; vers=$2;                # extract package name and version string from CSV columns
+        n=split(vers, parts, /\|\|/);   # split version string on "||" delimiter into array
         for (i=1; i<=n; i++) {
-          gsub(/^ */, "", vers[i]);
-          gsub(/ *$/, "", vers[i]);
-          if (vers[i] != "") {
-            print pkg "\t" vers[i];
+          gsub(/^ *= */,"", parts[i]);  # strip leading " = "
+          gsub(/ *$/,"",  parts[i]);    # trim trailing spaces
+          if (parts[i] != "") {         # only output non-empty version strings
+            print pkg "\t" parts[i];    # output package and version as tab-separated values
           }
         }
-      }
-    }' >> "$TMP_VULN"
+      }' "$TMP_WR" > "$CSV_SOURCE"
+
+      # Download and process Datadog Labs CSV -> TMP_DL
+      log_info "Downloading DataDog Labs consolidated IOCs CSV: ${BLUE}$DD_LABS_IOCS_CSV_URL${NC}"
+      curl -fsSL "$DD_LABS_IOCS_CSV_URL" -o "$TMP_DL"
+
+      # Normalize TMP_DL -> lines: "package<TAB>version" -> append to CSV_SOURCE
+      tr -d '\r' < "$TMP_DL" | sed '1d; s/,"[^"]*"$//' | awk '{
+        idx = index($0, ",");              # find first comma position in the line
+        if (idx > 0) {                     # if comma was found
+          pkg = substr($0, 1, idx-1);      # extract package name (everything before comma)
+          ver_str = substr($0, idx+1);     # extract version string (everything after comma)
+          gsub(/"/, "", ver_str);          # remove quotes from version string
+          n = split(ver_str, vers, ",");   # split version string on comma delimiter into array
+          for (i=1; i<=n; i++) {
+            gsub(/^ */, "", vers[i]);      # strip leading spaces from version
+            gsub(/ *$/, "", vers[i]);      # strip trailing spaces from version
+            if (vers[i] != "") {           # only output non-empty version strings
+              print pkg "\t" vers[i];      # output package and version as tab-separated values
+            }
+          }
+        }
+      }' >> "$CSV_SOURCE"
+      
+      # Remove duplicates from consolidated CSV, show debug
+      cat $CSV_SOURCE | sort -u -o "$CSV_SOURCE"
+      log_info "Wiz Research IOCs: ${BLUE}${TMP_WR}${NC} ($(cat $TMP_WR | wc -l | tr -d ' ') lines)"
+      log_info "DataDog Labs IOCs: ${BLUE}${TMP_DL}${NC} ($(cat $TMP_DL | wc -l | tr -d ' ') lines)"
+      log_info "Final consolidated IOCs: ${GREEN}${CSV_SOURCE}${NC} ($(cat $CSV_SOURCE | wc -l | tr -d ' ') lines)"
+    fi
 }
 
 check_vulnerable_package() {
@@ -179,7 +179,7 @@ check_vulnerable_package() {
     if awk -v n="$name" -v v="$ver" '
         $1 == n && $2 == v { found=1 }
         END { exit found ? 0 : 1 }
-      ' "$TMP_VULN"; then
+      ' "$CSV_SOURCE"; then
       log_critical "Vulnerable: $name@$ver (in $file)"
       return 0
     fi
@@ -209,22 +209,23 @@ scan_npm_lockfiles() {
       end
 EOF
 
-    local total_npm_lockfiles=$(find_files "package-lock.json" "${dirs[@]}" | wc -l)
-    local current_npm_lockfile=0
     while IFS= read -r LOCKFILE; do
-      current_npm_lockfile=$((current_npm_lockfile + 1))
-      log_info "Scanning npm lockfile: $LOCKFILE"
-      show_progress $current_npm_lockfile $total_npm_lockfiles
+      log_info "Scanning: ~${LOCKFILE#$HOME}"
 
       local INSTALLED_PACKAGES
       INSTALLED_PACKAGES="$(jq -r "$JQ_PROG" "$LOCKFILE" 2>/dev/null || true)"
+      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
+      local current_package=0
 
       while read -r NAME VER; do
+        current_package=$((current_package + 1))
+        progress $current_package $total_packages
         [ -z "$NAME" ] || [ -z "$VER" ] && continue
         if check_vulnerable_package "$NAME" "$VER" "$LOCKFILE"; then
              FOUND_ANY=1
         fi
       done <<< "$INSTALLED_PACKAGES"
+      blank_line
 
     done < <(find_files "package-lock.json" "${dirs[@]}")
 }
@@ -234,9 +235,7 @@ scan_pnpm_lockfiles() {
     local total_pnpm_lockfiles=$(find_files "pnpm-lock.yaml" "${dirs[@]}" | wc -l)
     local current_pnpm_lockfile=0
     while IFS= read -r PLOCK; do
-      current_pnpm_lockfile=$((current_pnpm_lockfile + 1))
-      log_info "Scanning pnpm lockfile: $PLOCK"
-      show_progress $current_pnpm_lockfile $total_pnpm_lockfiles
+      log_info "Scanning: ~${PLOCK#$HOME}"
 
       local INSTALLED_PACKAGES
       INSTALLED_PACKAGES="$(
@@ -259,13 +258,18 @@ scan_pnpm_lockfiles() {
           }
         '
       )"
+      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
+      local current_package=0
 
       while read -r NAME VER; do
+        current_package=$((current_package + 1))
+        progress $current_package $total_packages
         [ -z "$NAME" ] || [ -z "$VER" ] && continue
         if check_vulnerable_package "$NAME" "$VER" "$PLOCK"; then
              FOUND_ANY=1
         fi
       done <<< "$INSTALLED_PACKAGES"
+      blank_line
 
     done < <(find_files "pnpm-lock.yaml" "${dirs[@]}")
 }
@@ -275,9 +279,7 @@ scan_yarn_lockfiles() {
     local total_yarn_lockfiles=$(find_files "yarn.lock" "${dirs[@]}" | wc -l)
     local current_yarn_lockfile=0
     while IFS= read -r YLOCK; do
-      current_yarn_lockfile=$((current_yarn_lockfile + 1))
-      log_info "Scanning yarn lockfile: $YLOCK"
-      show_progress $current_yarn_lockfile $total_yarn_lockfiles
+      log_info "Scanning: ~${YLOCK#$HOME}"
 
       local INSTALLED_PACKAGES
       INSTALLED_PACKAGES="$(
@@ -306,20 +308,25 @@ scan_yarn_lockfiles() {
           }
         ' "$YLOCK"
       )"
+      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
+      local current_package=0
 
       while read -r NAME VER; do
+        current_package=$((current_package + 1))
+        progress $current_package $total_packages
         [ -z "$NAME" ] || [ -z "$VER" ] && continue
         if check_vulnerable_package "$NAME" "$VER" "$YLOCK"; then
              FOUND_ANY=1
         fi
       done <<< "$INSTALLED_PACKAGES"
+      blank_line
 
     done < <(find_files "yarn.lock" "${dirs[@]}")
 }
 
 # Run scans
 download_vulnerability_data
-log_info "Beginning scans"
+log_info "Beginning scans..."
 FOUND_ANY=0
 
 scan_npm_lockfiles "${DIRS[@]}"
