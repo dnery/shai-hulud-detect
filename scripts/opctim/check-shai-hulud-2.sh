@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Constants: upstream consolidated IOC lists
 WIZ_RESEARCH_CSV_URL="https://raw.githubusercontent.com/wiz-sec-public/wiz-research-iocs/refs/heads/main/reports/shai-hulud-2-packages.csv"
 DD_LABS_IOCS_CSV_URL="https://raw.githubusercontent.com/DataDog/indicators-of-compromise/refs/heads/main/shai-hulud-2.0/consolidated_iocs.csv"
 
@@ -9,10 +10,9 @@ RED=$'\033[0;31m'
 GREEN=$'\033[0;32m'
 YELLOW=$'\033[1;33m'
 BLUE=$'\033[1;34m'
-BRIGHT_MAGENTA=$'\033[1;35m'
 CYAN=$'\033[0;36m'
-CR=$'\r\033[K'
-NC=$'\033[0m' # No Color
+CR=$'\r\033[K' # Carriage return
+NC=$'\033[0m'  # No color
 
 # Output helpers
 log_info() {
@@ -33,9 +33,6 @@ log_success() {
 log_critical() {
     echo "${RED}[CRITICAL] $1${NC}"
 }
-blank_line() {  
-    echo ""
-}
 progress() {
     local current=$1
     local total=$2
@@ -46,7 +43,7 @@ progress() {
 
 # Check for dependencies
 check_dependency() {
-    if ! command -v "$1" &> /dev/null; then
+    if ! command -v "$1" &>/dev/null; then
         log_error "$1 is required but not installed."
         return 1
     fi
@@ -58,29 +55,30 @@ check_dependency curl || exit 1
 check_dependency awk || exit 1
 check_dependency yq || exit 1
 
-# fd is optional, find is required if fd is missing
+# fd is optional but recommended
 HAS_FD=0
-if command -v fd &> /dev/null; then
-  HAS_FD=1
-elif ! command -v find &> /dev/null; then
-  log_error "Neither 'fd' nor 'find' is available."
-  exit 1
+if command -v fd &>/dev/null; then
+    HAS_FD=1
+elif ! command -v find &>/dev/null; then
+    log_error "Neither 'fd' nor 'find' is available."
+    exit 1
 fi
 
-# Check for usage arguments
+# Check for usage arguments, show help
 if [ $# -eq 0 ]; then
-  log_error "Usage: $0 DIRECTORY..."
-  exit 2
+    log_error "Usage: $0 DIRECTORY..."
+    exit 2
 fi
 
+# Set dirs to scan if requested
 DIRS=()
 for arg in "$@"; do
-  if [ -d "$arg" ]; then
-    DIRS+=("$arg")
-  else
-    log_error "Error: not a directory: $arg"
-    exit 2
-  fi
+    if [ -d "$arg" ]; then
+        DIRS+=("$arg")
+    else
+        log_error "Error: not a directory: $arg"
+        exit 2
+    fi
 done
 
 # Temp files
@@ -94,41 +92,40 @@ find_files() {
     local filename="$1"
     shift
     local dirs=("$@")
-    
+
     if [ "$HAS_FD" -eq 1 ]; then
-        # Usually node_modules is ignored by fd by default.
-        # find command used to be `find "$DIR" -type f -name "package-lock.json"`
-        # shai-hulud usually targets package-lock.json, often in project root or subdirs.
-        # We probably want to search ignored directories too (like if someone committed it inside a gitignored folder?)
-        # But standard `find` doesn't care about gitignore, and `fd` respects gitignore by default.
         # To match `find` behavior (search everything):
-        # - `-u` (no ignore file, includes hidden) 
+        # - `-u` (no ignore file, includes hidden)
         # - `-I` (no ignore file)
         # - `-H` includes hidden files/dirs
-        # Let's use `-u` to match `find`'s broad scope.
         fd -u -t f --glob "$filename" "${dirs[@]}"
     else
         find "${dirs[@]}" -type f -name "$filename"
     fi
 }
 
+# Function to download vulnerability data (up-to-date list of IOCs)
 download_vulnerability_data() {
     # Decide CSV source: env var or download
     if [ -n "${SHAI_HULUD_CSV:-}" ]; then
-      if [ ! -f "$SHAI_HULUD_CSV" ]; then
-        log_error "Error: SHAI_HULUD_CSV is set, but file does not exist: $SHAI_HULUD_CSV"
-        exit 2
-      fi
-      CSV_SOURCE="$SHAI_HULUD_CSV"
-      log_info "Using vulnerability CSV from SHAI_HULUD_CSV: $CSV_SOURCE"
+        if [ ! -f "$SHAI_HULUD_CSV" ]; then
+            log_error "Error: SHAI_HULUD_CSV is set, but file does not exist: $SHAI_HULUD_CSV"
+            exit 2
+        fi
+        cp -f "$SHAI_HULUD_CSV" "$TMP_WR"
+        log_info "Using vulnerability CSV from SHAI_HULUD_CSV: $SHAI_HULUD_CSV"
     else
-      CSV_SOURCE="$TMP_CSV"
-      # Download and process Wiz Research CSV -> TMP_WR
-      log_info "Downloading Wiz Research affected packages CSV: ${BLUE}$WIZ_RESEARCH_CSV_URL${NC}"
-      curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$TMP_WR"
+        # Download Wiz Research CSV -> TMP_WR
+        log_info "Downloading Wiz Research affected packages CSV: ${BLUE}$WIZ_RESEARCH_CSV_URL${NC}"
+        curl -fsSL "$WIZ_RESEARCH_CSV_URL" -o "$TMP_WR"
 
-      # Normalize TMP_WR -> lines: "package<TAB>version" -> truncate to CSV_SOURCE
-      awk -F, 'NR>1 {
+        # Download and process Datadog Labs CSV -> TMP_DL
+        log_info "Downloading DataDog Labs consolidated IOCs CSV: ${BLUE}$DD_LABS_IOCS_CSV_URL${NC}"
+        curl -fsSL "$DD_LABS_IOCS_CSV_URL" -o "$TMP_DL"
+
+    fi
+    # Normalize TMP_WR -> lines: "package<TAB>version" -> append to CSV_SOURCE
+    cat "$TMP_WR" | awk -F, 'NR>1 {
         gsub(/"/,"");                   # drop quotes around package name
         pkg=$1; vers=$2;                # extract package name and version string from CSV columns
         n=split(vers, parts, /\|\|/);   # split version string on "||" delimiter into array
@@ -139,14 +136,9 @@ download_vulnerability_data() {
             print pkg "\t" parts[i];    # output package and version as tab-separated values
           }
         }
-      }' "$TMP_WR" > "$CSV_SOURCE"
-
-      # Download and process Datadog Labs CSV -> TMP_DL
-      log_info "Downloading DataDog Labs consolidated IOCs CSV: ${BLUE}$DD_LABS_IOCS_CSV_URL${NC}"
-      curl -fsSL "$DD_LABS_IOCS_CSV_URL" -o "$TMP_DL"
-
-      # Normalize TMP_DL -> lines: "package<TAB>version" -> append to CSV_SOURCE
-      tr -d '\r' < "$TMP_DL" | sed '1d; s/,"[^"]*"$//' | awk '{
+      }' >>"$TMP_CSV"
+    # Normalize TMP_DL -> lines: "package<TAB>version" -> append to CSV_SOURCE
+    tr -d '\r' <"$TMP_DL" | sed '1d; s/,"[^"]*"$//' | awk '{
         idx = index($0, ",");              # find first comma position in the line
         if (idx > 0) {                     # if comma was found
           pkg = substr($0, 1, idx-1);      # extract package name (everything before comma)
@@ -161,37 +153,39 @@ download_vulnerability_data() {
             }
           }
         }
-      }' >> "$CSV_SOURCE"
-      
-      # Remove duplicates from consolidated CSV, show debug
-      cat $CSV_SOURCE | sort -u -o "$CSV_SOURCE"
-      log_info "Wiz Research IOCs: ${BLUE}${TMP_WR}${NC} ($(cat $TMP_WR | wc -l | tr -d ' ') lines)"
-      log_info "DataDog Labs IOCs: ${BLUE}${TMP_DL}${NC} ($(cat $TMP_DL | wc -l | tr -d ' ') lines)"
-      log_info "Final consolidated IOCs: ${GREEN}${CSV_SOURCE}${NC} ($(cat $CSV_SOURCE | wc -l | tr -d ' ') lines)"
-    fi
+      }' >>"$TMP_CSV"
+
+    # Remove duplicates from consolidated CSV
+    cat $TMP_CSV | sort -u -o "$TMP_CSV"
+    CSV_SOURCE="$TMP_CSV"
+
+    log_info "Wiz Research IOCs: ${BLUE}${TMP_WR}${NC} ($(cat $TMP_WR | wc -l | tr -d ' ') lines)"
+    log_info "DataDog Labs IOCs: ${BLUE}${TMP_DL}${NC} ($(cat $TMP_DL | wc -l | tr -d ' ') lines)"
+    log_info "Final consolidated IOCs: ${GREEN}${CSV_SOURCE}${NC} ($(cat $CSV_SOURCE | wc -l | tr -d ' ') lines)"
 }
 
+# Function to check if a package is vulnerable given a name, version, and file path
 check_vulnerable_package() {
     local name="$1"
     local ver="$2"
-    local file="$3"
-    
+    local fp="$3"
+
     if awk -v n="$name" -v v="$ver" '
         $1 == n && $2 == v { found=1 }
         END { exit found ? 0 : 1 }
       ' "$CSV_SOURCE"; then
-      log_critical "Vulnerable: $name@$ver (in $file)"
-      return 0
+        log_critical "${CR}Vulnerable: $name@$ver (in $fp)"
+        return 0
     fi
     return 1
 }
 
+# Function to scan npm lockfiles given a set of dirs
 scan_npm_lockfiles() {
-    local dirs=("${@}")
-    
-    # jq program reused for each npm package-lock.json
-    local JQ_PROG
-    read -r -d '' JQ_PROG <<'EOF' || true
+    local lockfiles=$(find_files "package-lock.json" "${@}")
+    # jq program used to scan npm lockfiles (below)
+    local jq_program
+    read -r -d '' jq_program <<'EOF' || true
       if .packages then
         .packages
         | to_entries[]
@@ -208,39 +202,33 @@ scan_npm_lockfiles() {
         .dependencies // {} | walk_deps
       end
 EOF
+    for lockfile in $lockfiles; do
+        log_info "Scanning ~${lockfile#$HOME}"
 
-    while IFS= read -r LOCKFILE; do
-      log_info "Scanning: ~${LOCKFILE#$HOME}"
+        local installed_packages=$(jq -r "$jq_program" "$lockfile" 2>/dev/null || true)
+        local total_packages=$(echo "$installed_packages" | wc -l)
+        local current_package=0
 
-      local INSTALLED_PACKAGES
-      INSTALLED_PACKAGES="$(jq -r "$JQ_PROG" "$LOCKFILE" 2>/dev/null || true)"
-      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
-      local current_package=0
-
-      while read -r NAME VER; do
-        current_package=$((current_package + 1))
-        progress $current_package $total_packages
-        [ -z "$NAME" ] || [ -z "$VER" ] && continue
-        if check_vulnerable_package "$NAME" "$VER" "$LOCKFILE"; then
-             FOUND_ANY=1
-        fi
-      done <<< "$INSTALLED_PACKAGES"
-      blank_line
-
-    done < <(find_files "package-lock.json" "${dirs[@]}")
+        while read -r NAME VER; do
+            current_package=$((current_package + 1))
+            progress $current_package $total_packages
+            [ -z "$NAME" ] || [ -z "$VER" ] && continue
+            if check_vulnerable_package "$NAME" "$VER" "$lockfile"; then
+                FOUND_ANY=1
+            fi
+        done <<<"$installed_packages"
+        echo # newline
+    done
 }
 
+# Function to scan pnpm lockfiles given a set of dirs
 scan_pnpm_lockfiles() {
-    local dirs=("${@}")
-    local total_pnpm_lockfiles=$(find_files "pnpm-lock.yaml" "${dirs[@]}" | wc -l)
-    local current_pnpm_lockfile=0
-    while IFS= read -r PLOCK; do
-      log_info "Scanning: ~${PLOCK#$HOME}"
+    local lockfiles=$(find_files "pnpm-lock.yaml" "${@}")
+    for lockfile in $lockfiles; do
+        log_info "Scanning ~${lockfile#$HOME}"
 
-      local INSTALLED_PACKAGES
-      INSTALLED_PACKAGES="$(
-        yq -r '.packages // {} | to_entries[].key' "$PLOCK" 2>/dev/null \
-        | awk '
+        local yq_program='.packages // {} | to_entries[].key'
+        local installed_packages=$(yq -r "$yq_program" "$lockfile" 2>/dev/null | awk '
           {
             key = $0
             gsub(/^\/+/, "", key)        # remove leading "/"
@@ -256,34 +244,29 @@ scan_pnpm_lockfiles() {
               }
             }
           }
-        '
-      )"
-      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
-      local current_package=0
+        ')
+        local total_packages=$(echo "$installed_packages" | wc -l)
+        local current_package=0
 
-      while read -r NAME VER; do
-        current_package=$((current_package + 1))
-        progress $current_package $total_packages
-        [ -z "$NAME" ] || [ -z "$VER" ] && continue
-        if check_vulnerable_package "$NAME" "$VER" "$PLOCK"; then
-             FOUND_ANY=1
-        fi
-      done <<< "$INSTALLED_PACKAGES"
-      blank_line
-
-    done < <(find_files "pnpm-lock.yaml" "${dirs[@]}")
+        while read -r NAME VER; do
+            current_package=$((current_package + 1))
+            progress $current_package $total_packages
+            [ -z "$NAME" ] || [ -z "$VER" ] && continue
+            if check_vulnerable_package "$NAME" "$VER" "$lockfile"; then
+                FOUND_ANY=1
+            fi
+        done <<<"$installed_packages"
+        echo # newline
+    done
 }
 
+# Function to scan yarn lockfiles given a set of dirs
 scan_yarn_lockfiles() {
-    local dirs=("${@}")
-    local total_yarn_lockfiles=$(find_files "yarn.lock" "${dirs[@]}" | wc -l)
-    local current_yarn_lockfile=0
-    while IFS= read -r YLOCK; do
-      log_info "Scanning: ~${YLOCK#$HOME}"
+    local lockfiles=$(find_files "yarn.lock" "${@}")
+    for lockfile in $lockfiles; do
+        log_info "Scanning ~${lockfile#$HOME}"
 
-      local INSTALLED_PACKAGES
-      INSTALLED_PACKAGES="$(
-        awk '
+        local installed_packages=$(awk '
           /^[^[:space:]].*:$/ {
             # remove trailing colon + quotes
             line = $0
@@ -306,22 +289,20 @@ scan_yarn_lockfiles() {
             if (name != "" && ver != "")
               print name, ver
           }
-        ' "$YLOCK"
-      )"
-      local total_packages=$(echo "$INSTALLED_PACKAGES" | wc -l)
-      local current_package=0
+        ' "$lockfile")
+        local total_packages=$(echo "$installed_packages" | wc -l)
+        local current_package=0
 
-      while read -r NAME VER; do
-        current_package=$((current_package + 1))
-        progress $current_package $total_packages
-        [ -z "$NAME" ] || [ -z "$VER" ] && continue
-        if check_vulnerable_package "$NAME" "$VER" "$YLOCK"; then
-             FOUND_ANY=1
-        fi
-      done <<< "$INSTALLED_PACKAGES"
-      blank_line
-
-    done < <(find_files "yarn.lock" "${dirs[@]}")
+        while read -r NAME VER; do
+            current_package=$((current_package + 1))
+            progress $current_package $total_packages
+            [ -z "$NAME" ] || [ -z "$VER" ] && continue
+            if check_vulnerable_package "$NAME" "$VER" "$lockfile"; then
+                FOUND_ANY=1
+            fi
+        done <<<"$installed_packages"
+        echo # newline
+    done
 }
 
 # Run scans
@@ -333,10 +314,10 @@ scan_npm_lockfiles "${DIRS[@]}"
 scan_pnpm_lockfiles "${DIRS[@]}"
 scan_yarn_lockfiles "${DIRS[@]}"
 
-if (( FOUND_ANY )); then
-  log_critical "Vulnerable packages found."
-  exit 1
+if ((FOUND_ANY)); then
+    log_critical "Vulnerable packages found"
+    exit 1
 else
-  log_success "No vulnerable packages detected."
-  exit 0
+    log_success "No vulnerable packages detected"
+    exit 0
 fi
